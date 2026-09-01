@@ -238,14 +238,15 @@ pub fn execute(cmd: &PmCommand) -> Result<String, String> {
                         args.extend(cmd.args.clone());
                         let ask_res = Command::new("sudo")
                             .args(&args)
-                            .env("SUDO_ASKPASS", path)
+                            .env("SUDO_ASKPASS", &path)
                             .output();
                         match ask_res {
                             Ok(out) => {
                                 let mut comb = String::from_utf8_lossy(&out.stdout).to_string();
                                 comb.push_str(&String::from_utf8_lossy(&out.stderr));
                                 if out.status.success() {
-                                    return Ok(comb);
+                                    let header = format!("[askpass helper: {}]\n", path);
+                                    return Ok(format!("{}{}", header, comb));
                                 } else {
                                     let cmdline = format!("sudo {}", args.join(" "));
                                     let err_text = if comb.trim().is_empty() {
@@ -282,7 +283,8 @@ pub fn execute(cmd: &PmCommand) -> Result<String, String> {
                         let mut comb = String::from_utf8_lossy(&out.stdout).to_string();
                         comb.push_str(&String::from_utf8_lossy(&out.stderr));
                         if out.status.success() {
-                            return Ok(comb);
+                            let header = format!("[askpass helper: {}]\n", tmp_path);
+                            return Ok(format!("{}{}", header, comb));
                         } else {
                             let cmdline = format!("sudo {}", args.join(" "));
                             let err_text = if comb.trim().is_empty() {
