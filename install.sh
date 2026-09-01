@@ -117,6 +117,34 @@ else
                     break
                 fi
             done
+            # If not installed via official repos, try AUR helpers (yay/paru)
+            if ! (command -v ssh-askpass >/dev/null 2>&1 || command -v x11-ssh-askpass >/dev/null 2>&1 || command -v gnome-ssh-askpass >/dev/null 2>&1 || command -v ksshaskpass >/dev/null 2>&1 || command -v qt5-askpass >/dev/null 2>&1 || command -v openssh-askpass >/dev/null 2>&1); then
+                if command -v yay >/dev/null 2>&1 || command -v paru >/dev/null 2>&1; then
+                    AUR_HELPER=$(command -v yay >/dev/null 2>&1 && echo yay || echo paru)
+                    log "Attempting to install askpass via AUR helper: $AUR_HELPER"
+                    for pkg in openssh-askpass ssh-askpass; do
+                        if as_root $AUR_HELPER -S --noconfirm --needed "$pkg" >/dev/null 2>&1; then
+                            log "Installed $pkg via $AUR_HELPER"
+                            break
+                        fi
+                    done
+                else
+                    # Fall back to building from AUR via makepkg if possible
+                    if command -v makepkg >/dev/null 2>&1 && command -v git >/dev/null 2>&1; then
+                        log "No AUR helper found; attempting to build askpass from AUR (openssh-askpass or ssh-askpass)"
+                        for pkg in openssh-askpass ssh-askpass; do
+                            tmpd=$(mktemp -d)
+                            if git clone "https://aur.archlinux.org/${pkg}.git" "$tmpd" >/dev/null 2>&1; then
+                                (cd "$tmpd" && makepkg -si --noconfirm) >/dev/null 2>&1 && { log "Built and installed $pkg from AUR"; rm -rf "$tmpd"; break; } || rm -rf "$tmpd"
+                            else
+                                rm -rf "$tmpd"
+                            fi
+                        done
+                    else
+                        warn "No AUR helper (yay/paru) or makepkg available; could not install an askpass helper on pacman-based system."
+                    fi
+                fi
+            fi
             ;;
         zypper)
             for pkg in openssh-askpass ssh-askpass; do
