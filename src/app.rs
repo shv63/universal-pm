@@ -134,6 +134,23 @@ impl App {
     }
 
     fn spawn_list_installed(&mut self, scope: Scope, system: bool, password: Option<String>) {
+        // Special-case: when asking for Flatpak system-installed packages and
+        // no password was supplied, don't call into the backend's
+        // list_installed (which may call execute and try pkexec/sudo without
+        // prompting). Instead present the password modal so the user can
+        // provide one and we can run `sudo -S` safely.
+        if scope == Scope::Flatpak && system && password.is_none() {
+            let label = "list flatpaks (system)".to_string();
+            let cmd = backend::PmCommand::new(
+                "flatpak",
+                &["list", "--system", "--app", "--columns=application,name,version"],
+                true,
+            );
+            self.pending_cmd = Some((scope, cmd, label));
+            self.show_pw_prompt = true;
+            return;
+        }
+
         self.busy = true;
         let pm = self.backend_for(scope);
         let tx = self.tx.clone();
@@ -190,6 +207,17 @@ impl App {
     }
 
     fn spawn_list_repos(&mut self, scope: Scope, system: bool, password: Option<String>) {
+        // If asking for system flatpak repos and no password was supplied,
+        // present the password modal rather than letting the backend call
+        // into execute (which may try pkexec/sudo without prompting).
+        if scope == Scope::Flatpak && system && password.is_none() {
+            let label = "list flatpak remotes (system)".to_string();
+            let cmd = backend::PmCommand::new("flatpak", &["remotes", "--system", "--columns=name,url,title"], true);
+            self.pending_cmd = Some((scope, cmd, label));
+            self.show_pw_prompt = true;
+            return;
+        }
+
         self.busy = true;
         let pm = self.backend_for(scope);
         let tx = self.tx.clone();
@@ -199,7 +227,7 @@ impl App {
                     Scope::Flatpak => {
                         let cmd = backend::PmCommand::new(
                             "flatpak",
-                            &["remotes", if system { "--system" } else { "--user" }, "--columns=name,url,title,disabled"],
+                            &["remotes", if system { "--system" } else { "--user" }, "--columns=name,url,title"],
                             true,
                         ).with_password(password.unwrap());
                         backend::execute(&cmd).and_then(|out| {
@@ -213,10 +241,7 @@ impl App {
                                     id: cols[0].trim().to_string(),
                                     name: cols.get(2).unwrap_or(&cols[0]).trim().to_string(),
                                     url: cols.get(1).unwrap_or(&"").trim().to_string(),
-                                    enabled: cols
-                                        .get(3)
-                                        .map(|s| !s.trim().eq_ignore_ascii_case("true"))
-                                        .unwrap_or(true),
+                                    enabled: cols.get(3).map(|s| !s.trim().eq_ignore_ascii_case("true")).unwrap_or(true),
                                 });
                             }
                             Ok(repos)
