@@ -17,6 +17,9 @@ plus a built-in Flatpak tab. Comes with a dark/light theme toggle.
   native package manager.
 - **Flatpak support**: search, install/remove flatpak apps, update them,
   and manage Flatpak remotes (Flathub etc.) — all through the same UI.
+  If Flatpak itself isn't installed, the Flatpak tab offers a button to
+  install it via your native package manager, plus a one-click "Add
+  Flathub" once it's in.
 - **Dark / light theme toggle** in the top bar.
 - Privileged operations (install/remove/repo changes) run through
   `pkexec` (falling back to `sudo`) so you get a normal graphical
@@ -55,6 +58,23 @@ chmod +x install.sh
 
 Re-running the script later (either way) pulls the latest `main` and
 rebuilds, so it doubles as an updater.
+
+### Updating
+
+To update to the latest `main`, just run the same command again — it
+detects the existing checkout, `git pull`s, and rebuilds in place:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/shv63/universal-pm/main/install.sh | bash
+```
+
+Or, if you cloned manually:
+
+```bash
+cd universal-pm
+git pull
+cargo build --release
+```
 
 ### Building manually
 

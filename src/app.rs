@@ -186,7 +186,10 @@ impl App {
                 Msg::RepoList(Scope::Flatpak, r) => self.fp_repos = r,
                 Msg::Log(s) => self.append_log(&s),
                 Msg::Error(e) => self.append_log(&format!("ERROR: {e}")),
-                Msg::Done => self.busy = false,
+                Msg::Done => {
+                    self.busy = false;
+                    self.flatpak_available = crate::detect::flatpak_available();
+                }
             }
         }
     }
@@ -231,10 +234,8 @@ impl eframe::App for App {
                 ui.selectable_value(&mut self.tab, Tab::Search, "🔍 Search / Install");
                 ui.selectable_value(&mut self.tab, Tab::Installed, "📦 Installed");
                 ui.selectable_value(&mut self.tab, Tab::Repos, "🗂 Repositories");
-                if self.flatpak_available {
-                    ui.selectable_value(&mut self.tab, Tab::Flatpak, "▶ Flatpak");
-                    ui.selectable_value(&mut self.tab, Tab::FlatpakRepos, "▶ Flatpak Remotes");
-                }
+                ui.selectable_value(&mut self.tab, Tab::Flatpak, "▶ Flatpak");
+                ui.selectable_value(&mut self.tab, Tab::FlatpakRepos, "▶ Flatpak Remotes");
                 ui.selectable_value(&mut self.tab, Tab::Log, "🖥 Log");
             });
             ui.add_space(4.0);
@@ -400,9 +401,35 @@ impl App {
         });
     }
 
+    /// Shown on both Flatpak tabs when the `flatpak` binary isn't found —
+    /// offers to install it through the detected native package manager
+    /// instead of just being a dead end.
+    fn ui_flatpak_missing(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(12.0);
+        ui.label("Flatpak isn't installed on this system.");
+        ui.add_space(6.0);
+        if ui
+            .button(format!(
+                "Install Flatpak via {}",
+                self.native.display_name()
+            ))
+            .clicked()
+        {
+            let label = "install flatpak".to_string();
+            self.spawn_action(Scope::Native, label, |pm| pm.install_cmd("flatpak"));
+        }
+        ui.add_space(4.0);
+        ui.small(
+            "This runs your native package manager's install command for the \
+             \"flatpak\" package (elevated via pkexec/sudo). Once it finishes, \
+             this tab will switch over automatically — you'll likely still want \
+             to add the Flathub remote afterward from the Flatpak Remotes tab.",
+        );
+    }
+
     fn ui_flatpak(&mut self, ui: &mut egui::Ui) {
         if !self.flatpak_available {
-            ui.label("Flatpak is not installed on this system.");
+            self.ui_flatpak_missing(ui);
             return;
         }
         ui.horizontal(|ui| {
@@ -464,7 +491,7 @@ impl App {
 
     fn ui_flatpak_repos(&mut self, ui: &mut egui::Ui) {
         if !self.flatpak_available {
-            ui.label("Flatpak is not installed on this system.");
+            self.ui_flatpak_missing(ui);
             return;
         }
         ui.horizontal(|ui| {
@@ -481,6 +508,12 @@ impl App {
                 let label = format!("add flatpak remote {repo}");
                 self.spawn_action(Scope::Flatpak, label, move |pm| pm.add_repo_cmd(&repo));
                 self.new_fp_repo_input.clear();
+            }
+            ui.separator();
+            if ui.button("+ Add Flathub").clicked() {
+                let repo = "flathub https://flathub.org/repo/flathub.flatpakrepo".to_string();
+                let label = "add flatpak remote flathub".to_string();
+                self.spawn_action(Scope::Flatpak, label, move |pm| pm.add_repo_cmd(&repo));
             }
         });
         ui.small(
