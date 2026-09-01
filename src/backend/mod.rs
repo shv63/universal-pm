@@ -3,6 +3,7 @@ pub mod apt;
 pub mod dnf;
 pub mod flatpak;
 pub mod pacman;
+pub mod yay;
 pub mod zypper;
 
 use std::process::Command;

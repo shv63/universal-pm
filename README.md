@@ -8,7 +8,8 @@ plus a built-in Flatpak tab. Comes with a dark/light theme toggle.
 ## Features
 
 - **Auto-detects your distro's package manager** — Debian/Ubuntu (`apt`),
-  Fedora/RHEL (`dnf`), Arch (`pacman`), openSUSE (`zypper`), Alpine (`apk`).
+  Fedora/RHEL (`dnf`), Arch (`pacman`, or `yay` if installed — see caveat
+  below), openSUSE (`zypper`), Alpine (`apk`).
 - **Search & install / remove packages**, refresh the index, upgrade
   everything.
 - **View installed packages.**
@@ -88,6 +89,17 @@ output, including errors.
 
 ## Notes & things you may want to tweak
 
+- **AUR via `yay`**: if `yay` is installed, it's preferred over plain
+  `pacman` automatically (it's a superset — official repos + AUR). Its
+  search results include AUR packages. One real limitation: AUR builds
+  run through `makepkg`, which refuses to run as root, so unlike every
+  other backend here, `yay` commands are **not** wrapped in `pkexec`/
+  `sudo` — yay handles elevation internally. That means install/remove/
+  upgrade need passwordless `sudo` configured for `pacman` (see the
+  comment at the top of `backend/yay.rs` for the one-line `visudo`
+  addition), or they'll hang waiting for a password prompt this GUI can't
+  show. If you don't want to set that up, everything still works for
+  browsing/searching — just do privileged operations from a terminal.
 - **Adding a repo** is necessarily distro-specific in format (a
   `ppa:user/name` or full `deb ...` line for APT, a URL for DNF/Zypper, a
   `[name]` / `Server = ...` block for Pacman) — the Repositories tab shows
