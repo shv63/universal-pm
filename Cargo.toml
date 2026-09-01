@@ -1,0 +1,14 @@
+[package]
+name = "universal-pm"
+version = "0.1.0"
+edition = "2021"
+description = "A cross-distro package manager GUI with Flatpak and repo management"
+license = "MIT"
+
+[dependencies]
+eframe = "0.28"
+egui = "0.28"
+
+[profile.release]
+opt-level = 2
+lto = true
