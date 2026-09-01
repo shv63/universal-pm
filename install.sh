@@ -95,7 +95,9 @@ else
     log "No askpass helper found — attempting to install one via $PKG_MGR"
     case "$PKG_MGR" in
         apt-get)
-            for pkg in ssh-askpass x11-ssh-askpass ssh-askpass-gnome; do
+            # Debian/Ubuntu: common package names include ssh-askpass, openssh-askpass,
+            # x11-ssh-askpass and ssh-askpass-gnome / lxqt-openssh-askpass
+            for pkg in ssh-askpass openssh-askpass x11-ssh-askpass ssh-askpass-gnome lxqt-openssh-askpass; do
                 if as_root apt-get install -y "$pkg" >/dev/null 2>&1; then
                     log "Installed $pkg"
                     break
@@ -103,7 +105,8 @@ else
             done
             ;;
         dnf)
-            for pkg in openssh-askpass x11-ssh-askpass ssh-askpass; do
+            # Fedora: openssh-askpass, ksshaskpass, or x11-ssh-askpass
+            for pkg in openssh-askpass ksshaskpass x11-ssh-askpass ssh-askpass; do
                 if as_root dnf install -y "$pkg" >/dev/null 2>&1; then
                     log "Installed $pkg"
                     break
@@ -111,19 +114,21 @@ else
             done
             ;;
         pacman)
-            for pkg in ssh-askpass openssh-askpass; do
+            # Arch: try official repo names first, then AUR packages if needed
+            for pkg in openssh-askpass ssh-askpass; do
                 if as_root pacman -Sy --noconfirm --needed "$pkg" >/dev/null 2>&1; then
                     log "Installed $pkg"
                     break
                 fi
             done
+
             # If not installed via official repos, try AUR helpers (yay/paru)
             if ! (command -v ssh-askpass >/dev/null 2>&1 || command -v x11-ssh-askpass >/dev/null 2>&1 || command -v gnome-ssh-askpass >/dev/null 2>&1 || command -v ksshaskpass >/dev/null 2>&1 || command -v qt5-askpass >/dev/null 2>&1 || command -v openssh-askpass >/dev/null 2>&1); then
                 if command -v yay >/dev/null 2>&1 || command -v paru >/dev/null 2>&1; then
                     AUR_HELPER=$(command -v yay >/dev/null 2>&1 && echo yay || echo paru)
                     log "Attempting to install askpass via AUR helper: $AUR_HELPER"
                     for pkg in openssh-askpass ssh-askpass; do
-                        if as_root $AUR_HELPER -S --noconfirm --needed "$pkg" >/dev/null 2>&1; then
+                        if $AUR_HELPER -S --noconfirm --needed "$pkg" >/dev/null 2>&1; then
                             log "Installed $pkg via $AUR_HELPER"
                             break
                         fi
@@ -147,7 +152,8 @@ else
             fi
             ;;
         zypper)
-            for pkg in openssh-askpass ssh-askpass; do
+            # openSUSE: try openssh-askpass, ssh-askpass or ksshaskpass
+            for pkg in openssh-askpass ssh-askpass ksshaskpass; do
                 if as_root zypper --non-interactive install "$pkg" >/dev/null 2>&1; then
                     log "Installed $pkg"
                     break
@@ -155,7 +161,8 @@ else
             done
             ;;
         apk)
-            for pkg in ssh-askpass; do
+            # Alpine: try openssh-askpass and ssh-askpass
+            for pkg in openssh-askpass ssh-askpass; do
                 if as_root apk add "$pkg" >/dev/null 2>&1; then
                     log "Installed $pkg"
                     break
