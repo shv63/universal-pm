@@ -85,6 +85,59 @@ case "$PKG_MGR" in
 esac
 
 # ---------------------------------------------------------------------------
+# 2.5 Ensure an askpass helper exists (so sudo -A can use it). If one of the
+# common helpers is available we don't need to install anything; otherwise
+# attempt to install a suitable package for the detected package manager.
+# ---------------------------------------------------------------------------
+if command -v ssh-askpass >/dev/null 2>&1 || command -v x11-ssh-askpass >/dev/null 2>&1 || command -v gnome-ssh-askpass >/dev/null 2>&1 || command -v ksshaskpass >/dev/null 2>&1 || command -v qt5-askpass >/dev/null 2>&1 || command -v openssh-askpass >/dev/null 2>&1; then
+    log "Askpass helper already present"
+else
+    log "No askpass helper found — attempting to install one via $PKG_MGR"
+    case "$PKG_MGR" in
+        apt-get)
+            for pkg in ssh-askpass x11-ssh-askpass ssh-askpass-gnome; do
+                if as_root apt-get install -y "$pkg" >/dev/null 2>&1; then
+                    log "Installed $pkg"
+                    break
+                fi
+            done
+            ;;
+        dnf)
+            for pkg in openssh-askpass x11-ssh-askpass ssh-askpass; do
+                if as_root dnf install -y "$pkg" >/dev/null 2>&1; then
+                    log "Installed $pkg"
+                    break
+                fi
+            done
+            ;;
+        pacman)
+            for pkg in ssh-askpass openssh-askpass; do
+                if as_root pacman -Sy --noconfirm --needed "$pkg" >/dev/null 2>&1; then
+                    log "Installed $pkg"
+                    break
+                fi
+            done
+            ;;
+        zypper)
+            for pkg in openssh-askpass ssh-askpass; do
+                if as_root zypper --non-interactive install "$pkg" >/dev/null 2>&1; then
+                    log "Installed $pkg"
+                    break
+                fi
+            done
+            ;;
+        apk)
+            for pkg in ssh-askpass; do
+                if as_root apk add "$pkg" >/dev/null 2>&1; then
+                    log "Installed $pkg"
+                    break
+                fi
+            done
+            ;;
+    esac
+fi
+
+# ---------------------------------------------------------------------------
 # 3. Ensure a recent-enough Rust toolchain. Distro-packaged rustc is often
 #    too old for eframe's dependency tree, so we prefer rustup.
 # ---------------------------------------------------------------------------

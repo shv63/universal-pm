@@ -7,6 +7,7 @@ pub mod yay;
 pub mod zypper;
 
 use std::process::Command;
+use std::os::unix::fs::OpenOptionsExt;
 
 /// Minimal stand-in for the `which` crate: true if `bin` is an executable
 /// file somewhere on `$PATH` (or is itself a path to one).
@@ -176,6 +177,112 @@ pub fn execute(cmd: &PmCommand) -> Result<String, String> {
 
     let mut combined = String::from_utf8_lossy(&output.stdout).to_string();
     combined.push_str(&String::from_utf8_lossy(&output.stderr));
+
+    // If the attempt failed due to sudo requiring a TTY or password and we
+    // have a password, try using SUDO_ASKPASS as a fallback so GUI-provided
+    // passwords can be used on systems where sudo wants an interactive TTY.
+    if !output.status.success() {
+        let low = combined.to_lowercase();
+        let tty_err = low.contains("terminal is required") || low.contains("a password is required") || low.contains("password is required");
+        if pass_via_stdin && tty_err {
+            if let Some(pw) = &cmd.password {
+                // Create a small temporary askpass helper that prints the
+                // password. Use a unique filename under /tmp and restrict perms.
+                use std::io::Write;
+                use std::time::{SystemTime, UNIX_EPOCH};
+                let pid = std::process::id();
+                let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+                let tmp_path = format!("/tmp/universal-pm-askpass-{}-{}.sh", pid, nanos);
+                // Escape single quotes in the password for a single-quoted shell string.
+                let mut local_pw = pw.clone();
+                let esc_pw = local_pw.replace("'", r"'\''");
+                // Write helper script
+                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).write(true).mode(0o700).open(&tmp_path) {
+                    let _ = f.write_all(format!("#!/bin/sh\nprintf '%s\\n' '{}'\n", esc_pw).as_bytes());
+                    let _ = f.flush();
+                }
+
+                // Prefer an external askpass helper (if installed) so we don't
+                // need to write a helper file. Common helpers include
+                // ssh-askpass, x11-ssh-askpass, gnome-ssh-askpass, ksshaskpass,
+                // qt5-askpass, openssh-askpass.
+                let candidates = [
+                    "ssh-askpass",
+                    "x11-ssh-askpass",
+                    "gnome-ssh-askpass",
+                    "ksshaskpass",
+                    "qt5-askpass",
+                    "openssh-askpass",
+                ];
+                for cand in &candidates {
+                    if which(cand) {
+                        let mut args = vec!["-A".to_string(), cmd.program.clone()];
+                        args.extend(cmd.args.clone());
+                        let ask_res = Command::new("sudo")
+                            .args(&args)
+                            .env("SUDO_ASKPASS", cand)
+                            .output();
+                        match ask_res {
+                            Ok(out) => {
+                                let mut comb = String::from_utf8_lossy(&out.stdout).to_string();
+                                comb.push_str(&String::from_utf8_lossy(&out.stderr));
+                                if out.status.success() {
+                                    return Ok(comb);
+                                } else {
+                                    let cmdline = format!("sudo {}", args.join(" "));
+                                    let err_text = if comb.trim().is_empty() {
+                                        format!("sudo exited with status {}\ncommand: {}", out.status, cmdline)
+                                    } else {
+                                        format!("{}\ncommand: {}", comb, cmdline)
+                                    };
+                                    return Err(err_text);
+                                }
+                            }
+                            Err(e) => {
+                                let cmdline = format!("sudo {}", args.join(" "));
+                                return Err(format!("failed to run sudo -A: {}\ncommand: {}", e, cmdline));
+                            }
+                        }
+                    }
+                }
+
+                // No external helper found — fall back to creating a temporary
+                // askpass helper script that prints the password.
+                let mut args = vec!["-A".to_string(), cmd.program.clone()];
+                args.extend(cmd.args.clone());
+                let ask_res = Command::new("sudo")
+                    .args(&args)
+                    .env("SUDO_ASKPASS", &tmp_path)
+                    .output();
+
+                // Clean up helper and zeroize local copy
+                let _ = std::fs::remove_file(&tmp_path);
+                local_pw.zeroize();
+
+                match ask_res {
+                    Ok(out) => {
+                        let mut comb = String::from_utf8_lossy(&out.stdout).to_string();
+                        comb.push_str(&String::from_utf8_lossy(&out.stderr));
+                        if out.status.success() {
+                            return Ok(comb);
+                        } else {
+                            let cmdline = format!("sudo {}", args.join(" "));
+                            let err_text = if comb.trim().is_empty() {
+                                format!("sudo exited with status {}\ncommand: {}", out.status, cmdline)
+                            } else {
+                                format!("{}\ncommand: {}", comb, cmdline)
+                            };
+                            return Err(err_text);
+                        }
+                    }
+                    Err(e) => {
+                        let cmdline = format!("sudo {}", args.join(" "));
+                        return Err(format!("failed to run sudo -A: {}\ncommand: {}", e, cmdline));
+                    }
+                }
+            }
+        }
+    }
 
     if output.status.success() {
         Ok(combined)
