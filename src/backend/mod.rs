@@ -12,14 +12,32 @@ use std::os::unix::fs::OpenOptionsExt;
 /// Minimal stand-in for the `which` crate: true if `bin` is an executable
 /// file somewhere on `$PATH` (or is itself a path to one).
 pub fn which(bin: &str) -> bool {
-    if bin.contains('/') {
-        return std::path::Path::new(bin).is_file();
+    which_path(bin).is_some()
+}
+
+/// Return the full path to `bin` if it exists on PATH (or is an absolute path).
+pub fn which_path(bin: &str) -> Option<String> {
+    let p = std::path::Path::new(bin);
+    if p.is_absolute() || bin.contains('/') {
+        if p.is_file() {
+            return Some(bin.to_string());
+        }
+        return None;
     }
-    std::env::var_os("PATH")
-        .map(|paths| {
-            std::env::split_paths(&paths).any(|dir| dir.join(bin).is_file())
-        })
-        .unwrap_or(false)
+    match std::env::var_os("PATH") {
+        Some(paths) => {
+            for dir in std::env::split_paths(&paths) {
+                let cand = dir.join(bin);
+                if cand.is_file() {
+                    if let Some(s) = cand.to_str() {
+                        return Some(s.to_string());
+                    }
+                }
+            }
+            None
+        }
+        None => None,
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -215,12 +233,12 @@ pub fn execute(cmd: &PmCommand) -> Result<String, String> {
                     "openssh-askpass",
                 ];
                 for cand in &candidates {
-                    if which(cand) {
+                    if let Some(path) = which_path(cand) {
                         let mut args = vec!["-A".to_string(), cmd.program.clone()];
                         args.extend(cmd.args.clone());
                         let ask_res = Command::new("sudo")
                             .args(&args)
-                            .env("SUDO_ASKPASS", cand)
+                            .env("SUDO_ASKPASS", path)
                             .output();
                         match ask_res {
                             Ok(out) => {
