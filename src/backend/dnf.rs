@@ -11,7 +11,7 @@ impl PackageManager for Dnf {
         "dnf"
     }
 
-    fn search(&self, query: &str) -> Result<Vec<PackageInfo>, String> {
+    fn search(&self, query: &str, _system: bool) -> Result<Vec<PackageInfo>, String> {
         let out = run_capture("dnf", &["-q", "search", query])?;
         let installed = run_capture("dnf", &["-q", "list", "installed"]).unwrap_or_default();
         let mut results = Vec::new();
@@ -33,7 +33,7 @@ impl PackageManager for Dnf {
         Ok(results)
     }
 
-    fn list_installed(&self) -> Result<Vec<PackageInfo>, String> {
+    fn list_installed(&self, _system: bool) -> Result<Vec<PackageInfo>, String> {
         let out = run_capture("dnf", &["-q", "list", "installed"])?;
         let mut results = Vec::new();
         for line in out.lines() {
@@ -54,23 +54,23 @@ impl PackageManager for Dnf {
         Ok(results)
     }
 
-    fn install_cmd(&self, pkg: &str) -> PmCommand {
+    fn install_cmd(&self, pkg: &str, _system: bool) -> PmCommand {
         PmCommand::new("dnf", &["install", "-y", pkg], true)
     }
 
-    fn remove_cmd(&self, pkg: &str) -> PmCommand {
+    fn remove_cmd(&self, pkg: &str, _system: bool) -> PmCommand {
         PmCommand::new("dnf", &["remove", "-y", pkg], true)
     }
 
-    fn update_index_cmd(&self) -> PmCommand {
+    fn update_index_cmd(&self, _system: bool) -> PmCommand {
         PmCommand::new("dnf", &["makecache"], true)
     }
 
-    fn upgrade_all_cmd(&self) -> PmCommand {
+    fn upgrade_all_cmd(&self, _system: bool) -> PmCommand {
         PmCommand::new("dnf", &["upgrade", "-y"], true)
     }
 
-    fn list_repos(&self) -> Result<Vec<RepoInfo>, String> {
+    fn list_repos(&self, _system: bool) -> Result<Vec<RepoInfo>, String> {
         let out = run_capture("dnf", &["-q", "repolist", "--all"])?;
         let mut repos = Vec::new();
         for line in out.lines() {
@@ -96,11 +96,11 @@ impl PackageManager for Dnf {
         Ok(repos)
     }
 
-    fn add_repo_cmd(&self, repo: &str) -> PmCommand {
+    fn add_repo_cmd(&self, repo: &str, _system: bool) -> PmCommand {
         PmCommand::new("dnf", &["config-manager", "--add-repo", repo], true)
     }
 
-    fn remove_repo_cmd(&self, repo_id: &str) -> PmCommand {
+    fn remove_repo_cmd(&self, repo_id: &str, _system: bool) -> PmCommand {
         // Disabling rather than deleting the .repo file: reversible, and
         // avoids guessing which file on disk owns this repo id.
         PmCommand::new(

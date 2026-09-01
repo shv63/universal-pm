@@ -34,7 +34,7 @@ impl PackageManager for Yay {
         "yay"
     }
 
-    fn search(&self, query: &str) -> Result<Vec<PackageInfo>, String> {
+    fn search(&self, query: &str, _system: bool) -> Result<Vec<PackageInfo>, String> {
         let out = run_capture("yay", &["-Ss", query])?;
         let installed = run_capture("pacman", &["-Q"]).unwrap_or_default();
         let mut results = Vec::new();
@@ -70,37 +70,37 @@ impl PackageManager for Yay {
         Ok(results)
     }
 
-    fn list_installed(&self) -> Result<Vec<PackageInfo>, String> {
+    fn list_installed(&self, _system: bool) -> Result<Vec<PackageInfo>, String> {
         // AUR packages installed via yay still show up in plain `pacman -Q`.
-        Pacman.list_installed()
+        Pacman.list_installed(false)
     }
 
-    fn install_cmd(&self, pkg: &str) -> PmCommand {
+    fn install_cmd(&self, pkg: &str, _system: bool) -> PmCommand {
         // needs_root: false on purpose — see the module-level caveat above.
         PmCommand::new("yay", &["-S", "--noconfirm", pkg], false)
     }
 
-    fn remove_cmd(&self, pkg: &str) -> PmCommand {
+    fn remove_cmd(&self, pkg: &str, _system: bool) -> PmCommand {
         PmCommand::new("yay", &["-R", "--noconfirm", pkg], false)
     }
 
-    fn update_index_cmd(&self) -> PmCommand {
+    fn update_index_cmd(&self, _system: bool) -> PmCommand {
         PmCommand::new("yay", &["-Sy"], false)
     }
 
-    fn upgrade_all_cmd(&self) -> PmCommand {
+    fn upgrade_all_cmd(&self, _system: bool) -> PmCommand {
         PmCommand::new("yay", &["-Syu", "--noconfirm"], false)
     }
 
-    fn list_repos(&self) -> Result<Vec<RepoInfo>, String> {
-        Pacman.list_repos()
+    fn list_repos(&self, _system: bool) -> Result<Vec<RepoInfo>, String> {
+        Pacman.list_repos(false)
     }
 
-    fn add_repo_cmd(&self, repo: &str) -> PmCommand {
-        Pacman.add_repo_cmd(repo)
+    fn add_repo_cmd(&self, repo: &str, _system: bool) -> PmCommand {
+        Pacman.add_repo_cmd(repo, false)
     }
 
-    fn remove_repo_cmd(&self, repo_id: &str) -> PmCommand {
-        Pacman.remove_repo_cmd(repo_id)
+    fn remove_repo_cmd(&self, repo_id: &str, _system: bool) -> PmCommand {
+        Pacman.remove_repo_cmd(repo_id, false)
     }
 }

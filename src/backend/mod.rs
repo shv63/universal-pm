@@ -45,6 +45,10 @@ pub struct PmCommand {
     pub program: String,
     pub args: Vec<String>,
     pub needs_root: bool,
+    /// Optional password to send to sudo via stdin (used when the UI
+    /// collected a password from the user). If None the executor will
+    /// prefer pkexec or sudo without stdin.
+    pub password: Option<String>,
 }
 
 impl PmCommand {
@@ -53,7 +57,13 @@ impl PmCommand {
             program: program.to_string(),
             args: args.iter().map(|s| s.to_string()).collect(),
             needs_root,
+            password: None,
         }
+    }
+
+    pub fn with_password(mut self, pw: String) -> Self {
+        self.password = Some(pw);
+        self
     }
 }
 
@@ -68,17 +78,24 @@ pub trait PackageManager: Send + Sync {
     /// The underlying binary, e.g. "apt".
     fn binary(&self) -> &'static str;
 
-    fn search(&self, query: &str) -> Result<Vec<PackageInfo>, String>;
-    fn list_installed(&self) -> Result<Vec<PackageInfo>, String>;
+    /// Search for packages. `system` is ignored by most backends but used
+    /// by Flatpak to select a scope when relevant.
+    fn search(&self, query: &str, system: bool) -> Result<Vec<PackageInfo>, String>;
 
-    fn install_cmd(&self, pkg: &str) -> PmCommand;
-    fn remove_cmd(&self, pkg: &str) -> PmCommand;
-    fn update_index_cmd(&self) -> PmCommand;
-    fn upgrade_all_cmd(&self) -> PmCommand;
+    /// List installed packages. `system` chooses system/user scope for
+    /// backends that support it (flatpak); ignored elsewhere.
+    fn list_installed(&self, system: bool) -> Result<Vec<PackageInfo>, String>;
 
-    fn list_repos(&self) -> Result<Vec<RepoInfo>, String>;
-    fn add_repo_cmd(&self, repo: &str) -> PmCommand;
-    fn remove_repo_cmd(&self, repo_id: &str) -> PmCommand;
+    /// Build an install command for `pkg`. `system` allows backends like
+    /// Flatpak to return system-wide install commands when requested.
+    fn install_cmd(&self, pkg: &str, system: bool) -> PmCommand;
+    fn remove_cmd(&self, pkg: &str, system: bool) -> PmCommand;
+    fn update_index_cmd(&self, system: bool) -> PmCommand;
+    fn upgrade_all_cmd(&self, system: bool) -> PmCommand;
+
+    fn list_repos(&self, system: bool) -> Result<Vec<RepoInfo>, String>;
+    fn add_repo_cmd(&self, repo: &str, system: bool) -> PmCommand;
+    fn remove_repo_cmd(&self, repo_id: &str, system: bool) -> PmCommand;
 }
 
 /// Runs a read-only (non-privileged) command and returns stdout as a String.
@@ -100,18 +117,26 @@ pub fn run_capture(program: &str, args: &[&str]) -> Result<String, String> {
 
 /// Executes a `PmCommand`, transparently wrapping it in `pkexec` (falling
 /// back to `sudo`) when root is required. Returns combined stdout+stderr.
+use zeroize::Zeroize;
+
 pub fn execute(cmd: &PmCommand) -> Result<String, String> {
-    let (launcher, mut full_args): (String, Vec<String>) = if cmd.needs_root {
-        let launcher = if which("pkexec") {
-            "pkexec".to_string()
+    let (launcher, mut full_args, pass_via_stdin): (String, Vec<String>, bool) = if cmd.needs_root {
+        // If a password was supplied use "sudo -S" and feed the password to stdin.
+        if cmd.password.is_some() {
+            let mut args = vec![cmd.program.clone()];
+            args.extend(cmd.args.clone());
+            ("sudo".to_string(), args, true)
+        } else if which("pkexec") {
+            let mut args = vec![cmd.program.clone()];
+            args.extend(cmd.args.clone());
+            ("pkexec".to_string(), args, false)
         } else {
-            "sudo".to_string()
-        };
-        let mut args = vec![cmd.program.clone()];
-        args.extend(cmd.args.clone());
-        (launcher, args)
+            let mut args = vec![cmd.program.clone()];
+            args.extend(cmd.args.clone());
+            ("sudo".to_string(), args, false)
+        }
     } else {
-        (cmd.program.clone(), cmd.args.clone())
+        (cmd.program.clone(), cmd.args.clone(), false)
     };
 
     // Non-interactive where the backend supports it, so we never hang
@@ -120,21 +145,61 @@ pub fn execute(cmd: &PmCommand) -> Result<String, String> {
         full_args = cmd.args.clone();
     }
 
-    let out = Command::new(&launcher)
+    let mut child = Command::new(&launcher)
         .args(&full_args)
-        .output()
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
         .map_err(|e| format!("failed to run {launcher}: {e}"))?;
 
-    let mut combined = String::from_utf8_lossy(&out.stdout).to_string();
-    combined.push_str(&String::from_utf8_lossy(&out.stderr));
+    if pass_via_stdin {
+        if let Some(mut stdin) = child.stdin.take() {
+            if let Some(pw) = &cmd.password {
+                use std::io::Write;
+                // Clone into a local mutable string so we can zeroize it immediately
+                // after writing it to the child's stdin. This avoids leaving the
+                // plaintext lingering in this stack frame. The original
+                // PmCommand still owns its copy; the UI will zero that separately.
+                let mut local_pw = pw.clone();
+                let _ = stdin.write_all(format!("{}\n", local_pw).as_bytes());
+                local_pw.zeroize();
+            }
+        }
+    }
 
-    if out.status.success() {
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("failed to wait for {launcher}: {e}"))?;
+
+    let mut combined = String::from_utf8_lossy(&output.stdout).to_string();
+    combined.push_str(&String::from_utf8_lossy(&output.stderr));
+
+    if output.status.success() {
         Ok(combined)
     } else {
         Err(if combined.trim().is_empty() {
-            format!("{launcher} exited with status {}", out.status)
+            format!("{launcher} exited with status {}", output.status)
         } else {
             combined
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn run_capture_echo() {
+        let out = run_capture("echo", &["hello"]).expect("echo should run");
+        assert_eq!(out.trim(), "hello");
+    }
+
+    #[test]
+    fn execute_echo() {
+        let cmd = PmCommand::new("echo", &["world"], false);
+        let out = execute(&cmd).expect("execute should run echo");
+        assert!(out.contains("world"));
     }
 }

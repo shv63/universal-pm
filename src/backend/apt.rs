@@ -32,7 +32,7 @@ impl PackageManager for Apt {
         "apt"
     }
 
-    fn search(&self, query: &str) -> Result<Vec<PackageInfo>, String> {
+    fn search(&self, query: &str, _system: bool) -> Result<Vec<PackageInfo>, String> {
         let out = run_capture("apt-cache", &["search", query])?;
         let installed = installed_set();
         let mut results = Vec::new();
@@ -50,7 +50,7 @@ impl PackageManager for Apt {
         Ok(results)
     }
 
-    fn list_installed(&self) -> Result<Vec<PackageInfo>, String> {
+    fn list_installed(&self, _system: bool) -> Result<Vec<PackageInfo>, String> {
         let out = run_capture(
             "dpkg-query",
             &["-W", "-f=${Package}\t${Version}\t${Status}\t${binary:Summary}\n"],
@@ -70,23 +70,23 @@ impl PackageManager for Apt {
         Ok(results)
     }
 
-    fn install_cmd(&self, pkg: &str) -> PmCommand {
+    fn install_cmd(&self, pkg: &str, _system: bool) -> PmCommand {
         PmCommand::new("apt-get", &["install", "-y", pkg], true)
     }
 
-    fn remove_cmd(&self, pkg: &str) -> PmCommand {
+    fn remove_cmd(&self, pkg: &str, _system: bool) -> PmCommand {
         PmCommand::new("apt-get", &["remove", "-y", pkg], true)
     }
 
-    fn update_index_cmd(&self) -> PmCommand {
+    fn update_index_cmd(&self, _system: bool) -> PmCommand {
         PmCommand::new("apt-get", &["update"], true)
     }
 
-    fn upgrade_all_cmd(&self) -> PmCommand {
+    fn upgrade_all_cmd(&self, _system: bool) -> PmCommand {
         PmCommand::new("apt-get", &["upgrade", "-y"], true)
     }
 
-    fn list_repos(&self) -> Result<Vec<RepoInfo>, String> {
+    fn list_repos(&self, _system: bool) -> Result<Vec<RepoInfo>, String> {
         let mut files = vec!["/etc/apt/sources.list".to_string()];
         if let Ok(entries) = fs::read_dir("/etc/apt/sources.list.d") {
             for e in entries.flatten() {
@@ -122,13 +122,13 @@ impl PackageManager for Apt {
         Ok(repos)
     }
 
-    fn add_repo_cmd(&self, repo: &str) -> PmCommand {
+    fn add_repo_cmd(&self, repo: &str, _system: bool) -> PmCommand {
         // Expects a PPA-style ("ppa:user/name") or full `deb ...` line, both
         // of which `add-apt-repository` understands.
         PmCommand::new("add-apt-repository", &["-y", repo], true)
     }
 
-    fn remove_repo_cmd(&self, repo_id: &str) -> PmCommand {
+    fn remove_repo_cmd(&self, repo_id: &str, _system: bool) -> PmCommand {
         // repo_id here is expected to be the original repo string (a
         // "ppa:user/name" or `deb ...` line) as shown in the UI, since
         // add-apt-repository --remove needs the same spec that added it.

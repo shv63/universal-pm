@@ -10,10 +10,8 @@ use super::{run_capture, PackageInfo, PackageManager, PmCommand, RepoInfo};
 /// system-wide flatpaks (requires root).
 pub struct Flatpak;
 
-const SYSTEM_WIDE: bool = false;
-
-fn scope_flag() -> &'static str {
-    if SYSTEM_WIDE {
+fn scope_flag(system: bool) -> &'static str {
+    if system {
         "--system"
     } else {
         "--user"
@@ -29,16 +27,26 @@ impl PackageManager for Flatpak {
         "flatpak"
     }
 
-    fn search(&self, query: &str) -> Result<Vec<PackageInfo>, String> {
+    fn search(&self, query: &str, system: bool) -> Result<Vec<PackageInfo>, String> {
         let out = run_capture(
             "flatpak",
             &["search", "--columns=name,description,application", query],
         )?;
-        let installed = run_capture(
-            "flatpak",
-            &["list", scope_flag(), "--app", "--columns=application"],
-        )
-        .unwrap_or_default();
+        let installed = if system {
+            // Try to get system list via execute (may require root); fall back to empty
+            super::execute(&PmCommand::new(
+                "flatpak",
+                &["list", "--system", "--app", "--columns=application"],
+                true,
+            ))
+            .unwrap_or_default()
+        } else {
+            run_capture(
+                "flatpak",
+                &["list", "--user", "--app", "--columns=application"],
+            )
+            .unwrap_or_default()
+        };
         let mut results = Vec::new();
         for line in out.lines() {
             let cols: Vec<&str> = line.split('\t').collect();
@@ -59,57 +67,83 @@ impl PackageManager for Flatpak {
         Ok(results)
     }
 
-    fn list_installed(&self) -> Result<Vec<PackageInfo>, String> {
-        let out = run_capture(
-            "flatpak",
-            &[
-                "list",
-                scope_flag(),
-                "--app",
-                "--columns=application,name,version",
-            ],
-        )?;
-        let mut results = Vec::new();
-        for line in out.lines() {
-            let cols: Vec<&str> = line.split('\t').collect();
-            if cols.is_empty() || cols[0].trim().is_empty() {
-                continue;
+    fn list_installed(&self, system: bool) -> Result<Vec<PackageInfo>, String> {
+        if system {
+            let out = super::execute(&PmCommand::new(
+                "flatpak",
+                &["list", "--system", "--app", "--columns=application,name,version"],
+                true,
+            ))?;
+            let mut results = Vec::new();
+            for line in out.lines() {
+                let cols: Vec<&str> = line.split('\t').collect();
+                if cols.is_empty() || cols[0].trim().is_empty() {
+                    continue;
+                }
+                results.push(PackageInfo {
+                    name: cols[0].trim().to_string(),
+                    version: cols.get(2).unwrap_or(&"").trim().to_string(),
+                    description: cols.get(1).unwrap_or(&"").trim().to_string(),
+                    installed: true,
+                });
             }
-            results.push(PackageInfo {
-                name: cols[0].trim().to_string(),
-                version: cols.get(2).unwrap_or(&"").trim().to_string(),
-                description: cols.get(1).unwrap_or(&"").trim().to_string(),
-                installed: true,
-            });
+            Ok(results)
+        } else {
+            let out = run_capture(
+                "flatpak",
+                &[
+                    "list",
+                    "--user",
+                    "--app",
+                    "--columns=application,name,version",
+                ],
+            )?;
+            let mut results = Vec::new();
+            for line in out.lines() {
+                let cols: Vec<&str> = line.split('\t').collect();
+                if cols.is_empty() || cols[0].trim().is_empty() {
+                    continue;
+                }
+                results.push(PackageInfo {
+                    name: cols[0].trim().to_string(),
+                    version: cols.get(2).unwrap_or(&"").trim().to_string(),
+                    description: cols.get(1).unwrap_or(&"").trim().to_string(),
+                    installed: true,
+                });
+            }
+            Ok(results)
         }
-        Ok(results)
     }
 
-    fn install_cmd(&self, pkg: &str) -> PmCommand {
+    fn install_cmd(&self, pkg: &str, system: bool) -> PmCommand {
         PmCommand::new(
             "flatpak",
-            &["install", scope_flag(), "-y", "--or-update", pkg],
-            false,
+            &["install", if system { "--system" } else { "--user" }, "-y", "--or-update", pkg],
+            system,
         )
     }
 
-    fn remove_cmd(&self, pkg: &str) -> PmCommand {
-        PmCommand::new("flatpak", &["uninstall", scope_flag(), "-y", pkg], false)
+    fn remove_cmd(&self, pkg: &str, system: bool) -> PmCommand {
+        PmCommand::new("flatpak", &["uninstall", if system { "--system" } else { "--user" }, "-y", pkg], system)
     }
 
-    fn update_index_cmd(&self) -> PmCommand {
-        PmCommand::new("flatpak", &["update", scope_flag(), "--appstream", "-y"], false)
+    fn update_index_cmd(&self, system: bool) -> PmCommand {
+        PmCommand::new("flatpak", &["update", if system { "--system" } else { "--user" }, "--appstream", "-y"], system)
     }
 
-    fn upgrade_all_cmd(&self) -> PmCommand {
-        PmCommand::new("flatpak", &["update", scope_flag(), "-y"], false)
+    fn upgrade_all_cmd(&self, system: bool) -> PmCommand {
+        PmCommand::new("flatpak", &["update", if system { "--system" } else { "--user" }, "-y"], system)
     }
 
-    fn list_repos(&self) -> Result<Vec<RepoInfo>, String> {
-        let out = run_capture(
-            "flatpak",
-            &["remotes", scope_flag(), "--columns=name,url,title,disabled"],
-        )?;
+    fn list_repos(&self, system: bool) -> Result<Vec<RepoInfo>, String> {
+        let out = if system {
+            super::execute(&PmCommand::new("flatpak", &["remotes", "--system", "--columns=name,url,title,disabled"], true))?
+        } else {
+            run_capture(
+                "flatpak",
+                &["remotes", "--user", "--columns=name,url,title,disabled"],
+            )?
+        };
         let mut repos = Vec::new();
         for line in out.lines() {
             let cols: Vec<&str> = line.split('\t').collect();
@@ -119,7 +153,7 @@ impl PackageManager for Flatpak {
             repos.push(RepoInfo {
                 id: cols[0].trim().to_string(),
                 name: cols.get(2).unwrap_or(&cols[0]).trim().to_string(),
-                url: cols.get(1).unwrap_or(&"").trim().to_string(),
+                url: cols.get(1).unwrap_or(&"\"").trim().to_string(),
                 enabled: cols
                     .get(3)
                     .map(|s| !s.trim().eq_ignore_ascii_case("true"))
@@ -129,7 +163,7 @@ impl PackageManager for Flatpak {
         Ok(repos)
     }
 
-    fn add_repo_cmd(&self, repo: &str) -> PmCommand {
+    fn add_repo_cmd(&self, repo: &str, system: bool) -> PmCommand {
         // Expects "<name> <url>", e.g. "flathub https://flathub.org/repo/flathub.flatpakrepo"
         let mut parts = repo.split_whitespace();
         let name = parts.next().unwrap_or("remote");
@@ -138,16 +172,17 @@ impl PackageManager for Flatpak {
             "flatpak",
             &[
                 "remote-add",
-                scope_flag(),
+                if system { "--system" } else { "--user" },
                 "--if-not-exists",
                 name,
                 url,
             ],
-            false,
+            system,
         )
     }
 
-    fn remove_repo_cmd(&self, repo_id: &str) -> PmCommand {
-        PmCommand::new("flatpak", &["remote-delete", scope_flag(), repo_id], false)
+    fn remove_repo_cmd(&self, repo_id: &str, system: bool) -> PmCommand {
+        PmCommand::new("flatpak", &["remote-delete", if system { "--system" } else { "--user" }, repo_id], system)
     }
 }
+

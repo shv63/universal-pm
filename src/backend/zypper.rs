@@ -15,7 +15,7 @@ impl PackageManager for Zypper {
         "zypper"
     }
 
-    fn search(&self, query: &str) -> Result<Vec<PackageInfo>, String> {
+    fn search(&self, query: &str, _system: bool) -> Result<Vec<PackageInfo>, String> {
         let out = run_capture("zypper", &["--non-interactive", "se", query])?;
         let mut results = Vec::new();
         for line in out.lines() {
@@ -37,7 +37,7 @@ impl PackageManager for Zypper {
         Ok(results)
     }
 
-    fn list_installed(&self) -> Result<Vec<PackageInfo>, String> {
+    fn list_installed(&self, _system: bool) -> Result<Vec<PackageInfo>, String> {
         let out = run_capture("rpm", &["-qa", "--qf", "%{NAME}\t%{VERSION}\t%{SUMMARY}\n"])?;
         let mut results = Vec::new();
         for line in out.lines() {
@@ -54,23 +54,23 @@ impl PackageManager for Zypper {
         Ok(results)
     }
 
-    fn install_cmd(&self, pkg: &str) -> PmCommand {
+    fn install_cmd(&self, pkg: &str, _system: bool) -> PmCommand {
         PmCommand::new("zypper", &["--non-interactive", "install", pkg], true)
     }
 
-    fn remove_cmd(&self, pkg: &str) -> PmCommand {
+    fn remove_cmd(&self, pkg: &str, _system: bool) -> PmCommand {
         PmCommand::new("zypper", &["--non-interactive", "remove", pkg], true)
     }
 
-    fn update_index_cmd(&self) -> PmCommand {
+    fn update_index_cmd(&self, _system: bool) -> PmCommand {
         PmCommand::new("zypper", &["--non-interactive", "refresh"], true)
     }
 
-    fn upgrade_all_cmd(&self) -> PmCommand {
+    fn upgrade_all_cmd(&self, _system: bool) -> PmCommand {
         PmCommand::new("zypper", &["--non-interactive", "update"], true)
     }
 
-    fn list_repos(&self) -> Result<Vec<RepoInfo>, String> {
+    fn list_repos(&self, _system: bool) -> Result<Vec<RepoInfo>, String> {
         let out = run_capture("zypper", &["--non-interactive", "lr", "-d"])?;
         let mut repos = Vec::new();
         for line in out.lines() {
@@ -94,12 +94,12 @@ impl PackageManager for Zypper {
         Ok(repos)
     }
 
-    fn add_repo_cmd(&self, repo: &str) -> PmCommand {
+    fn add_repo_cmd(&self, repo: &str, _system: bool) -> PmCommand {
         // `repo` is a URL; zypper derives an alias automatically.
         PmCommand::new("zypper", &["ar", "-f", repo], true)
     }
 
-    fn remove_repo_cmd(&self, repo_id: &str) -> PmCommand {
+    fn remove_repo_cmd(&self, repo_id: &str, _system: bool) -> PmCommand {
         PmCommand::new("zypper", &["rr", repo_id], true)
     }
 }

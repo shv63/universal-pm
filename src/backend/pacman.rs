@@ -12,7 +12,7 @@ impl PackageManager for Pacman {
         "pacman"
     }
 
-    fn search(&self, query: &str) -> Result<Vec<PackageInfo>, String> {
+    fn search(&self, query: &str, _system: bool) -> Result<Vec<PackageInfo>, String> {
         let out = run_capture("pacman", &["-Ss", query])?;
         let installed = run_capture("pacman", &["-Q"]).unwrap_or_default();
         let mut results = Vec::new();
@@ -47,7 +47,7 @@ impl PackageManager for Pacman {
         Ok(results)
     }
 
-    fn list_installed(&self) -> Result<Vec<PackageInfo>, String> {
+    fn list_installed(&self, _system: bool) -> Result<Vec<PackageInfo>, String> {
         let out = run_capture("pacman", &["-Q"])?;
         let mut results = Vec::new();
         for line in out.lines() {
@@ -64,23 +64,23 @@ impl PackageManager for Pacman {
         Ok(results)
     }
 
-    fn install_cmd(&self, pkg: &str) -> PmCommand {
+    fn install_cmd(&self, pkg: &str, _system: bool) -> PmCommand {
         PmCommand::new("pacman", &["-S", "--noconfirm", pkg], true)
     }
 
-    fn remove_cmd(&self, pkg: &str) -> PmCommand {
+    fn remove_cmd(&self, pkg: &str, _system: bool) -> PmCommand {
         PmCommand::new("pacman", &["-R", "--noconfirm", pkg], true)
     }
 
-    fn update_index_cmd(&self) -> PmCommand {
+    fn update_index_cmd(&self, _system: bool) -> PmCommand {
         PmCommand::new("pacman", &["-Sy"], true)
     }
 
-    fn upgrade_all_cmd(&self) -> PmCommand {
+    fn upgrade_all_cmd(&self, _system: bool) -> PmCommand {
         PmCommand::new("pacman", &["-Syu", "--noconfirm"], true)
     }
 
-    fn list_repos(&self) -> Result<Vec<RepoInfo>, String> {
+    fn list_repos(&self, _system: bool) -> Result<Vec<RepoInfo>, String> {
         let content = fs::read_to_string("/etc/pacman.conf").unwrap_or_default();
         let mut repos = Vec::new();
         let mut current: Option<String> = None;
@@ -121,7 +121,7 @@ impl PackageManager for Pacman {
         Ok(repos)
     }
 
-    fn add_repo_cmd(&self, repo: &str) -> PmCommand {
+    fn add_repo_cmd(&self, repo: &str, _system: bool) -> PmCommand {
         // `repo` is expected to already be a full block, e.g.:
         //   [myrepo]\nServer = https://example.com/$repo/$arch
         // appended verbatim to pacman.conf.
@@ -132,7 +132,7 @@ impl PackageManager for Pacman {
         )
     }
 
-    fn remove_repo_cmd(&self, repo_id: &str) -> PmCommand {
+    fn remove_repo_cmd(&self, repo_id: &str, _system: bool) -> PmCommand {
         // Strips the [repo_id] section (and its body, up to the next
         // section or EOF) out of pacman.conf using awk.
         let script = format!(

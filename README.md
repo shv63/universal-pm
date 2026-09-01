@@ -22,9 +22,17 @@ plus a built-in Flatpak tab. Comes with a dark/light theme toggle.
   Flathub" once it's in.
 - **Dark / light theme toggle** in the top bar.
 - Privileged operations (install/remove/repo changes) run through
-  `pkexec` (falling back to `sudo`) so you get a normal graphical
-  authentication prompt. Flatpak operations default to `--user` scope and
-  need no elevation at all.
+  `pkexec` (falling back to `sudo`). The UI also supports collecting a
+  password inline (or via a modal prompt) and feeding it to `sudo -S` for
+  environments where you prefer that fallback. Flatpak operations default
+  to `--user` scope and need no elevation by default, but the Flatpak
+  tab exposes a per-operation User / System toggle so you can choose to
+  perform system-wide installs (which require root) instead.
+
+- Multi-select: many package lists provide a "Select packages" checkbox
+  mode so you can pick multiple packages (checkmarks) and perform bulk
+  Install / Remove actions. For Flatpak bulk installs/removals the
+  chosen User/System scope is applied uniformly to every selected item.
 
 ## Installation
 

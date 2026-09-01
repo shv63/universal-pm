@@ -1,5 +1,6 @@
 use crate::backend::{self, PackageInfo, PackageManager, RepoInfo};
 use eframe::egui;
+use std::collections::HashSet;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 
@@ -48,6 +49,16 @@ pub struct App {
     new_repo_input: String,
     new_fp_repo_input: String,
 
+    // UI state
+    fp_system: bool,
+    select_mode: bool,
+    selected: HashSet<String>,
+
+    // Password prompt state
+    show_pw_prompt: bool,
+    pw_input: String,
+    pending_cmd: Option<(Scope, backend::PmCommand, String)>,
+
     log: String,
     busy: bool,
 
@@ -75,6 +86,12 @@ impl App {
             fp_repos: Vec::new(),
             new_repo_input: String::new(),
             new_fp_repo_input: String::new(),
+            fp_system: false,
+            select_mode: false,
+            selected: HashSet::new(),
+            show_pw_prompt: false,
+            pw_input: String::new(),
+            pending_cmd: None,
             log: String::new(),
             busy: false,
             tx,
@@ -96,7 +113,7 @@ impl App {
         }
     }
 
-    fn spawn_search(&mut self, scope: Scope, query: String) {
+    fn spawn_search(&mut self, scope: Scope, query: String, system: bool) {
         if query.trim().is_empty() {
             return;
         }
@@ -104,7 +121,7 @@ impl App {
         let pm = self.backend_for(scope);
         let tx = self.tx.clone();
         std::thread::spawn(move || {
-            match pm.search(&query) {
+            match pm.search(&query, system) {
                 Ok(results) => {
                     let _ = tx.send(Msg::SearchResults(scope, results));
                 }
@@ -116,12 +133,51 @@ impl App {
         });
     }
 
-    fn spawn_list_installed(&mut self, scope: Scope) {
+    fn spawn_list_installed(&mut self, scope: Scope, system: bool, password: Option<String>) {
         self.busy = true;
         let pm = self.backend_for(scope);
         let tx = self.tx.clone();
         std::thread::spawn(move || {
-            match pm.list_installed() {
+            // If a password was supplied, run the underlying program via execute
+            // (which supports feeding the password to sudo -S). Otherwise call
+            // the backend's list_installed method which may call run_capture.
+            let res = if password.is_some() {
+                // build a generic command for `list` — for Flatpak this is
+                // flatpak list --system/--user --app --columns=application,name,version
+                // For other backends, fall back to list_installed() since we
+                // don't have a generic command.
+                match scope {
+                    Scope::Flatpak => {
+                        let cmd = backend::PmCommand::new(
+                            "flatpak",
+                            &["list", if system { "--system" } else { "--user" }, "--app", "--columns=application,name,version"],
+                            true,
+                        ).with_password(password.unwrap());
+                        backend::execute(&cmd).and_then(|out| {
+                            // parse into Vec<PackageInfo>
+                            let mut results = Vec::new();
+                            for line in out.lines() {
+                                let cols: Vec<&str> = line.split('\t').collect();
+                                if cols.is_empty() || cols[0].trim().is_empty() {
+                                    continue;
+                                }
+                                results.push(PackageInfo {
+                                    name: cols[0].trim().to_string(),
+                                    version: cols.get(2).unwrap_or(&"").trim().to_string(),
+                                    description: cols.get(1).unwrap_or(&"").trim().to_string(),
+                                    installed: true,
+                                });
+                            }
+                            Ok(results)
+                        })
+                    }
+                    _ => pm.list_installed(system),
+                }
+            } else {
+                pm.list_installed(system)
+            };
+
+            match res {
                 Ok(results) => {
                     let _ = tx.send(Msg::InstalledList(scope, results));
                 }
@@ -133,12 +189,46 @@ impl App {
         });
     }
 
-    fn spawn_list_repos(&mut self, scope: Scope) {
+    fn spawn_list_repos(&mut self, scope: Scope, system: bool, password: Option<String>) {
         self.busy = true;
         let pm = self.backend_for(scope);
         let tx = self.tx.clone();
         std::thread::spawn(move || {
-            match pm.list_repos() {
+            let res = if password.is_some() {
+                match scope {
+                    Scope::Flatpak => {
+                        let cmd = backend::PmCommand::new(
+                            "flatpak",
+                            &["remotes", if system { "--system" } else { "--user" }, "--columns=name,url,title,disabled"],
+                            true,
+                        ).with_password(password.unwrap());
+                        backend::execute(&cmd).and_then(|out| {
+                            let mut repos = Vec::new();
+                            for line in out.lines() {
+                                let cols: Vec<&str> = line.split('\t').collect();
+                                if cols.is_empty() || cols[0].trim().is_empty() {
+                                    continue;
+                                }
+                                repos.push(RepoInfo {
+                                    id: cols[0].trim().to_string(),
+                                    name: cols.get(2).unwrap_or(&cols[0]).trim().to_string(),
+                                    url: cols.get(1).unwrap_or(&"").trim().to_string(),
+                                    enabled: cols
+                                        .get(3)
+                                        .map(|s| !s.trim().eq_ignore_ascii_case("true"))
+                                        .unwrap_or(true),
+                                });
+                            }
+                            Ok(repos)
+                        })
+                    }
+                    _ => pm.list_repos(system),
+                }
+            } else {
+                pm.list_repos(system)
+            };
+
+            match res {
                 Ok(results) => {
                     let _ = tx.send(Msg::RepoList(scope, results));
                 }
@@ -152,16 +242,22 @@ impl App {
 
     /// Runs any PmCommand-producing closure (install/remove/update/upgrade/
     /// add-repo/remove-repo) in the background and logs the outcome.
-    fn spawn_action<F>(&mut self, scope: Scope, label: String, make_cmd: F)
-    where
-        F: FnOnce(&dyn PackageManager) -> backend::PmCommand + Send + 'static,
-    {
+    fn spawn_action(&mut self, scope: Scope, label: String, mut cmd: backend::PmCommand) {
+        // If the command requires root but has no password attached, prompt
+        // the user for one so it can be fed to sudo -S. Otherwise execute.
+        if cmd.needs_root && cmd.password.is_none() {
+            self.pending_cmd = Some((scope, cmd, label));
+            self.show_pw_prompt = true;
+            return;
+        }
+
         self.busy = true;
-        let pm = self.backend_for(scope);
         let tx = self.tx.clone();
         std::thread::spawn(move || {
-            let cmd = make_cmd(pm.as_ref());
             let _ = tx.send(Msg::Log(format!("$ {}\n", label)));
+            // Execute the command. After running, if the PmCommand carried a
+            // password, take it and zeroize it so the plaintext doesn't linger
+            // in memory longer than necessary.
             match backend::execute(&cmd) {
                 Ok(out) => {
                     let _ = tx.send(Msg::Log(out));
@@ -171,8 +267,24 @@ impl App {
                     let _ = tx.send(Msg::Error(format!("{label} failed: {e}")));
                 }
             }
+
+            // Zeroize any password still stored on the moved-in command (best
+            // effort: we take ownership of the Option<String> and zeroize it).
+            if let Some(mut pw) = cmd.password {
+                use zeroize::Zeroize;
+                pw.zeroize();
+            }
+
             let _ = tx.send(Msg::Done);
         });
+
+        // Clear the UI-side password buffer now that the action is launched.
+        // Use zeroize to avoid leaving the password in memory.
+        if !self.pw_input.is_empty() {
+            use zeroize::Zeroize;
+            self.pw_input.zeroize();
+            self.pw_input.clear();
+        }
     }
 
     fn drain_messages(&mut self) {
@@ -249,6 +361,57 @@ impl eframe::App for App {
             Tab::FlatpakRepos => self.ui_flatpak_repos(ui),
             Tab::Log => self.ui_log(ui),
         });
+
+        // Password prompt modal: when a privileged command is about to run
+        // and no password was supplied, show a prompt to enter one so it can
+        // be fed to sudo -S. The user can cancel as well.
+        if self.show_pw_prompt {
+            let mut open = self.show_pw_prompt;
+            egui::Window::new("Enter root password (or leave blank to use pkexec)")
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    ui.label("Some operations require root privileges.");
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.label("Password:");
+                        let resp = ui.add(egui::TextEdit::singleline(&mut self.pw_input).password(true));
+                        // Request keyboard focus for a smoother UX when the modal opens.
+                        resp.request_focus();
+                        // If the user presses Enter in the field, submit the form.
+                        if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                            // emulate pressing Run
+                            if let Some((scope, mut cmd, label)) = self.pending_cmd.take() {
+                                if !self.pw_input.is_empty() {
+                                    cmd = cmd.with_password(self.pw_input.clone());
+                                }
+                                self.show_pw_prompt = false;
+                                self.pending_cmd = None;
+                                self.spawn_action(scope, label, cmd);
+                            }
+                        }
+                    });
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Run").clicked() {
+                            if let Some((scope, mut cmd, label)) = self.pending_cmd.take() {
+                                if !self.pw_input.is_empty() {
+                                    cmd = cmd.with_password(self.pw_input.clone());
+                                }
+                                self.show_pw_prompt = false;
+                                self.pending_cmd = None;
+                                self.spawn_action(scope, label, cmd);
+                            }
+                        }
+                        if ui.button("Cancel").clicked() {
+                            self.show_pw_prompt = false;
+                            self.pending_cmd = None;
+                        }
+                    });
+                });
+            self.show_pw_prompt = open;
+        }
     }
 }
 
@@ -260,25 +423,42 @@ impl App {
             let go = ui.button("Search").clicked()
                 || (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
             if go {
-                self.spawn_search(Scope::Native, self.search_query.clone());
+                self.spawn_search(Scope::Native, self.search_query.clone(), false);
             }
             ui.separator();
             if ui.button("⟲ Refresh package index").clicked() {
                 let cmd_label = "update package index".to_string();
-                self.spawn_action(Scope::Native, cmd_label, |pm| pm.update_index_cmd());
+                let cmd = self.backend_for(Scope::Native).update_index_cmd(false);
+                self.spawn_action(Scope::Native, cmd_label, cmd);
             }
             if ui.button("⬆ Upgrade all").clicked() {
                 let cmd_label = "upgrade all packages".to_string();
-                self.spawn_action(Scope::Native, cmd_label, |pm| pm.upgrade_all_cmd());
+                let cmd = self.backend_for(Scope::Native).upgrade_all_cmd(false);
+                self.spawn_action(Scope::Native, cmd_label, cmd);
+            }
+            ui.separator();
+            ui.checkbox(&mut self.select_mode, "Select packages");
+            if self.select_mode {
+                if ui.button("Install Selected").clicked() {
+                    let mut names: Vec<String> = self.selected.iter().cloned().collect();
+                    self.selected.clear();
+                    for name in names {
+                        let label = format!("install {name}");
+                        let cmd = self.backend_for(Scope::Native).install_cmd(&name, false);
+                        self.spawn_action(Scope::Native, label, cmd);
+                    }
+                }
             }
         });
         ui.separator();
 
         egui::ScrollArea::vertical().show(ui, |ui| {
+            let cols = if self.select_mode { 5 } else { 4 };
             egui::Grid::new("search_results_grid")
-                .num_columns(4)
+                .num_columns(cols)
                 .striped(true)
                 .show(ui, |ui| {
+                    if self.select_mode { ui.strong(""); }
                     ui.strong("Name");
                     ui.strong("Description");
                     ui.strong("Status");
@@ -288,6 +468,16 @@ impl App {
                     let mut to_install: Option<String> = None;
                     let mut to_remove: Option<String> = None;
                     for pkg in &self.search_results {
+                        if self.select_mode {
+                            let mut checked = self.selected.contains(&pkg.name);
+                            if ui.checkbox(&mut checked, "").clicked() {
+                                if checked {
+                                    self.selected.insert(pkg.name.clone());
+                                } else {
+                                    self.selected.remove(&pkg.name);
+                                }
+                            }
+                        }
                         ui.label(&pkg.name);
                         ui.label(&pkg.description);
                         ui.label(if pkg.installed { "installed" } else { "" });
@@ -302,11 +492,13 @@ impl App {
                     }
                     if let Some(name) = to_install {
                         let label = format!("install {name}");
-                        self.spawn_action(Scope::Native, label, move |pm| pm.install_cmd(&name));
+                        let cmd = self.backend_for(Scope::Native).install_cmd(&name, false);
+                        self.spawn_action(Scope::Native, label, cmd);
                     }
                     if let Some(name) = to_remove {
                         let label = format!("remove {name}");
-                        self.spawn_action(Scope::Native, label, move |pm| pm.remove_cmd(&name));
+                        let cmd = self.backend_for(Scope::Native).remove_cmd(&name, false);
+                        self.spawn_action(Scope::Native, label, cmd);
                     }
                 });
         });
@@ -315,16 +507,31 @@ impl App {
     fn ui_installed(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             if ui.button("⟲ Refresh installed list").clicked() {
-                self.spawn_list_installed(Scope::Native);
+                self.spawn_list_installed(Scope::Native, false, None);
             }
             ui.label(format!("{} packages installed", self.installed.len()));
+            ui.separator();
+            ui.checkbox(&mut self.select_mode, "Select packages");
+            if self.select_mode {
+                if ui.button("Remove Selected").clicked() {
+                    let names: Vec<String> = self.selected.iter().cloned().collect();
+                    self.selected.clear();
+                    for name in names {
+                        let label = format!("remove {name}");
+                        let cmd = self.backend_for(Scope::Native).remove_cmd(&name, false);
+                        self.spawn_action(Scope::Native, label, cmd);
+                    }
+                }
+            }
         });
         ui.separator();
         egui::ScrollArea::vertical().show(ui, |ui| {
+            let cols = if self.select_mode { 5 } else { 4 };
             egui::Grid::new("installed_grid")
-                .num_columns(4)
+                .num_columns(cols)
                 .striped(true)
                 .show(ui, |ui| {
+                    if self.select_mode { ui.strong(""); }
                     ui.strong("Name");
                     ui.strong("Version");
                     ui.strong("Description");
@@ -333,6 +540,16 @@ impl App {
 
                     let mut to_remove: Option<String> = None;
                     for pkg in &self.installed {
+                        if self.select_mode {
+                            let mut checked = self.selected.contains(&pkg.name);
+                            if ui.checkbox(&mut checked, "").clicked() {
+                                if checked {
+                                    self.selected.insert(pkg.name.clone());
+                                } else {
+                                    self.selected.remove(&pkg.name);
+                                }
+                            }
+                        }
                         ui.label(&pkg.name);
                         ui.label(&pkg.version);
                         ui.label(&pkg.description);
@@ -343,7 +560,8 @@ impl App {
                     }
                     if let Some(name) = to_remove {
                         let label = format!("remove {name}");
-                        self.spawn_action(Scope::Native, label, move |pm| pm.remove_cmd(&name));
+                        let cmd = self.backend_for(Scope::Native).remove_cmd(&name, false);
+                        self.spawn_action(Scope::Native, label, cmd);
                     }
                 });
         });
@@ -352,7 +570,7 @@ impl App {
     fn ui_repos(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             if ui.button("⟲ Refresh repo list").clicked() {
-                self.spawn_list_repos(Scope::Native);
+                self.spawn_list_repos(Scope::Native, false, None);
             }
         });
         ui.separator();
@@ -362,7 +580,8 @@ impl App {
             if ui.button("Add").clicked() && !self.new_repo_input.trim().is_empty() {
                 let repo = self.new_repo_input.clone();
                 let label = format!("add repo {repo}");
-                self.spawn_action(Scope::Native, label, move |pm| pm.add_repo_cmd(&repo));
+                let cmd = self.backend_for(Scope::Native).add_repo_cmd(&repo, false);
+                self.spawn_action(Scope::Native, label, cmd);
                 self.new_repo_input.clear();
             }
         });
@@ -395,7 +614,8 @@ impl App {
                     }
                     if let Some(id) = to_remove {
                         let label = format!("remove repo {id}");
-                        self.spawn_action(Scope::Native, label, move |pm| pm.remove_repo_cmd(&id));
+                        let cmd = self.backend_for(Scope::Native).remove_repo_cmd(&id, true);
+                        self.spawn_action(Scope::Native, label, cmd);
                     }
                 });
         });
@@ -416,7 +636,8 @@ impl App {
             .clicked()
         {
             let label = "install flatpak".to_string();
-            self.spawn_action(Scope::Native, label, |pm| pm.install_cmd("flatpak"));
+        let cmd = self.backend_for(Scope::Native).install_cmd("flatpak", true);
+        self.spawn_action(Scope::Native, label, cmd);
         }
         ui.add_space(4.0);
         ui.small(
@@ -438,24 +659,69 @@ impl App {
             let go = ui.button("Search").clicked()
                 || (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
             if go {
-                self.spawn_search(Scope::Flatpak, self.fp_query.clone());
+                self.spawn_search(Scope::Flatpak, self.fp_query.clone(), self.fp_system);
             }
             ui.separator();
-            if ui.button("📋 List installed").clicked() {
-                self.spawn_list_installed(Scope::Flatpak);
+            ui.horizontal(|ui| {
+                ui.radio_value(&mut self.fp_system, false, "User");
+                ui.radio_value(&mut self.fp_system, true, "System");
+            });
+            if self.fp_system {
+                ui.add(egui::widgets::Label::new("System actions require root: provide password below (optional: use pkexec)").wrap());
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.label("Password:");
+                    ui.add(egui::TextEdit::singleline(&mut self.pw_input).password(true));
+                    if ui.button("List installed (system)").clicked() {
+                        let pw = if self.pw_input.is_empty() { None } else { Some(self.pw_input.clone()) };
+                        self.spawn_list_installed(Scope::Flatpak, true, pw);
+                    }
+                    if ui.button("Refresh remotes (system)").clicked() {
+                        let pw = if self.pw_input.is_empty() { None } else { Some(self.pw_input.clone()) };
+                        self.spawn_list_repos(Scope::Flatpak, true, pw);
+                    }
+                });
+            } else {
+                if ui.button("📋 List installed").clicked() {
+                    self.spawn_list_installed(Scope::Flatpak, false, None);
+                }
+                if ui.button("⟲ Refresh remotes").clicked() {
+                    self.spawn_list_repos(Scope::Flatpak, false, None);
+                }
             }
             if ui.button("⬆ Update all flatpaks").clicked() {
                 let label = "update all flatpaks".to_string();
-                self.spawn_action(Scope::Flatpak, label, |pm| pm.upgrade_all_cmd());
+                let cmd = self.backend_for(Scope::Flatpak).upgrade_all_cmd(self.fp_system);
+                self.spawn_action(Scope::Flatpak, label, cmd);
+            }
+            ui.separator();
+            ui.checkbox(&mut self.select_mode, "Select packages");
+            if self.select_mode {
+                if ui.button("Install Selected").clicked() {
+                    let mut names: Vec<String> = self.selected.iter().cloned().collect();
+                    self.selected.clear();
+                    for name in names {
+                        let label = format!("install flatpak {name}");
+                        let cmd = self.backend_for(Scope::Flatpak).install_cmd(&name, self.fp_system);
+                        if self.fp_system && !self.pw_input.is_empty() {
+                            let cmd = cmd.with_password(self.pw_input.clone());
+                            self.spawn_action(Scope::Flatpak, label, cmd);
+                        } else {
+                            self.spawn_action(Scope::Flatpak, label, cmd);
+                        }
+                    }
+                }
             }
         });
         ui.separator();
 
         egui::ScrollArea::vertical().show(ui, |ui| {
+            let cols = if self.select_mode { 5 } else { 4 };
             egui::Grid::new("flatpak_grid")
-                .num_columns(4)
+                .num_columns(cols)
                 .striped(true)
                 .show(ui, |ui| {
+                    if self.select_mode { ui.strong(""); }
                     ui.strong("App ID");
                     ui.strong("Name / Version");
                     ui.strong("Description");
@@ -465,6 +731,16 @@ impl App {
                     let mut to_install: Option<String> = None;
                     let mut to_remove: Option<String> = None;
                     for pkg in &self.fp_results {
+                        if self.select_mode {
+                            let mut checked = self.selected.contains(&pkg.name);
+                            if ui.checkbox(&mut checked, "").clicked() {
+                                if checked {
+                                    self.selected.insert(pkg.name.clone());
+                                } else {
+                                    self.selected.remove(&pkg.name);
+                                }
+                            }
+                        }
                         ui.label(&pkg.name);
                         ui.label(&pkg.version);
                         ui.label(&pkg.description);
@@ -479,11 +755,15 @@ impl App {
                     }
                     if let Some(id) = to_install {
                         let label = format!("install flatpak {id}");
-                        self.spawn_action(Scope::Flatpak, label, move |pm| pm.install_cmd(&id));
+                        let cmd = self.backend_for(Scope::Flatpak).install_cmd(&id, self.fp_system);
+                        let cmd = if self.fp_system && !self.pw_input.is_empty() { cmd.with_password(self.pw_input.clone()) } else { cmd };
+                        self.spawn_action(Scope::Flatpak, label, cmd);
                     }
                     if let Some(id) = to_remove {
                         let label = format!("remove flatpak {id}");
-                        self.spawn_action(Scope::Flatpak, label, move |pm| pm.remove_cmd(&id));
+                        let cmd = self.backend_for(Scope::Flatpak).remove_cmd(&id, self.fp_system);
+                        let cmd = if self.fp_system && !self.pw_input.is_empty() { cmd.with_password(self.pw_input.clone()) } else { cmd };
+                        self.spawn_action(Scope::Flatpak, label, cmd);
                     }
                 });
         });
@@ -495,8 +775,13 @@ impl App {
             return;
         }
         ui.horizontal(|ui| {
+            ui.horizontal(|ui| {
+                ui.radio_value(&mut self.fp_system, false, "User");
+                ui.radio_value(&mut self.fp_system, true, "System");
+            });
             if ui.button("⟲ Refresh remotes").clicked() {
-                self.spawn_list_repos(Scope::Flatpak);
+                let pw = if self.fp_system && !self.pw_input.is_empty() { Some(self.pw_input.clone()) } else { None };
+                self.spawn_list_repos(Scope::Flatpak, self.fp_system, pw);
             }
         });
         ui.separator();
@@ -506,14 +791,22 @@ impl App {
             if ui.button("Add").clicked() && !self.new_fp_repo_input.trim().is_empty() {
                 let repo = self.new_fp_repo_input.clone();
                 let label = format!("add flatpak remote {repo}");
-                self.spawn_action(Scope::Flatpak, label, move |pm| pm.add_repo_cmd(&repo));
+                let mut cmd = self.backend_for(Scope::Flatpak).add_repo_cmd(&repo, self.fp_system);
+                if self.fp_system && !self.pw_input.is_empty() {
+                    cmd = cmd.with_password(self.pw_input.clone());
+                }
+                self.spawn_action(Scope::Flatpak, label, cmd);
                 self.new_fp_repo_input.clear();
             }
             ui.separator();
             if ui.button("+ Add Flathub").clicked() {
                 let repo = "flathub https://flathub.org/repo/flathub.flatpakrepo".to_string();
                 let label = "add flatpak remote flathub".to_string();
-                self.spawn_action(Scope::Flatpak, label, move |pm| pm.add_repo_cmd(&repo));
+                let mut cmd = self.backend_for(Scope::Flatpak).add_repo_cmd(&repo, self.fp_system);
+                if self.fp_system && !self.pw_input.is_empty() {
+                    cmd = cmd.with_password(self.pw_input.clone());
+                }
+                self.spawn_action(Scope::Flatpak, label, cmd);
             }
         });
         ui.small(
@@ -544,7 +837,11 @@ impl App {
                     }
                     if let Some(id) = to_remove {
                         let label = format!("remove flatpak remote {id}");
-                        self.spawn_action(Scope::Flatpak, label, move |pm| pm.remove_repo_cmd(&id));
+                        let mut cmd = self.backend_for(Scope::Flatpak).remove_repo_cmd(&id, self.fp_system);
+                        if self.fp_system && !self.pw_input.is_empty() {
+                            cmd = cmd.with_password(self.pw_input.clone());
+                        }
+                        self.spawn_action(Scope::Flatpak, label, cmd);
                     }
                 });
         });

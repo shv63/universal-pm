@@ -38,7 +38,7 @@ impl PackageManager for Apk {
         "apk"
     }
 
-    fn search(&self, query: &str) -> Result<Vec<PackageInfo>, String> {
+    fn search(&self, query: &str, _system: bool) -> Result<Vec<PackageInfo>, String> {
         let out = run_capture("apk", &["search", "-v", query])?;
         let installed_out = run_capture("apk", &["info", "-v"]).unwrap_or_default();
         let installed_names: Vec<String> = parse_verbose_listing(&installed_out, true)
@@ -52,28 +52,28 @@ impl PackageManager for Apk {
         Ok(results)
     }
 
-    fn list_installed(&self) -> Result<Vec<PackageInfo>, String> {
+    fn list_installed(&self, _system: bool) -> Result<Vec<PackageInfo>, String> {
         let out = run_capture("apk", &["info", "-v"])?;
         Ok(parse_verbose_listing(&out, true))
     }
 
-    fn install_cmd(&self, pkg: &str) -> PmCommand {
+    fn install_cmd(&self, pkg: &str, _system: bool) -> PmCommand {
         PmCommand::new("apk", &["add", pkg], true)
     }
 
-    fn remove_cmd(&self, pkg: &str) -> PmCommand {
+    fn remove_cmd(&self, pkg: &str, _system: bool) -> PmCommand {
         PmCommand::new("apk", &["del", pkg], true)
     }
 
-    fn update_index_cmd(&self) -> PmCommand {
+    fn update_index_cmd(&self, _system: bool) -> PmCommand {
         PmCommand::new("apk", &["update"], true)
     }
 
-    fn upgrade_all_cmd(&self) -> PmCommand {
+    fn upgrade_all_cmd(&self, _system: bool) -> PmCommand {
         PmCommand::new("apk", &["upgrade"], true)
     }
 
-    fn list_repos(&self) -> Result<Vec<RepoInfo>, String> {
+    fn list_repos(&self, _system: bool) -> Result<Vec<RepoInfo>, String> {
         let content = fs::read_to_string("/etc/apk/repositories").unwrap_or_default();
         let mut repos = Vec::new();
         for (i, raw) in content.lines().enumerate() {
@@ -93,7 +93,7 @@ impl PackageManager for Apk {
         Ok(repos)
     }
 
-    fn add_repo_cmd(&self, repo: &str) -> PmCommand {
+    fn add_repo_cmd(&self, repo: &str, _system: bool) -> PmCommand {
         PmCommand::new(
             "sh",
             &[
@@ -104,7 +104,7 @@ impl PackageManager for Apk {
         )
     }
 
-    fn remove_repo_cmd(&self, repo_id: &str) -> PmCommand {
+    fn remove_repo_cmd(&self, repo_id: &str, _system: bool) -> PmCommand {
         // repo_id is the line's URL (list_repos uses the URL as name/id
         // for apk since the file has no separate alias).
         let script = format!(

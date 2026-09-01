@@ -8,6 +8,7 @@ license = "MIT"
 [dependencies]
 eframe = "0.28"
 egui = "0.28"
+zeroize = "1.6"
 
 [profile.release]
 opt-level = 2
