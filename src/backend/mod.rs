@@ -76,6 +76,7 @@ pub trait PackageManager: Send + Sync {
     fn display_name(&self) -> &'static str;
 
     /// The underlying binary, e.g. "apt".
+    #[allow(dead_code)]
     fn binary(&self) -> &'static str;
 
     /// Search for packages. `system` is ignored by most backends but used

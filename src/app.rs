@@ -242,7 +242,7 @@ impl App {
 
     /// Runs any PmCommand-producing closure (install/remove/update/upgrade/
     /// add-repo/remove-repo) in the background and logs the outcome.
-    fn spawn_action(&mut self, scope: Scope, label: String, mut cmd: backend::PmCommand) {
+    fn spawn_action(&mut self, scope: Scope, label: String, cmd: backend::PmCommand) {
         // If the command requires root but has no password attached, prompt
         // the user for one so it can be fed to sudo -S. Otherwise execute.
         if cmd.needs_root && cmd.password.is_none() {
@@ -440,7 +440,7 @@ impl App {
             ui.checkbox(&mut self.select_mode, "Select packages");
             if self.select_mode {
                 if ui.button("Install Selected").clicked() {
-                    let mut names: Vec<String> = self.selected.iter().cloned().collect();
+                    let names: Vec<String> = self.selected.iter().cloned().collect();
                     self.selected.clear();
                     for name in names {
                         let label = format!("install {name}");
@@ -698,7 +698,7 @@ impl App {
             ui.checkbox(&mut self.select_mode, "Select packages");
             if self.select_mode {
                 if ui.button("Install Selected").clicked() {
-                    let mut names: Vec<String> = self.selected.iter().cloned().collect();
+                    let names: Vec<String> = self.selected.iter().cloned().collect();
                     self.selected.clear();
                     for name in names {
                         let label = format!("install flatpak {name}");

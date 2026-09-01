@@ -10,14 +10,6 @@ use super::{run_capture, PackageInfo, PackageManager, PmCommand, RepoInfo};
 /// system-wide flatpaks (requires root).
 pub struct Flatpak;
 
-fn scope_flag(system: bool) -> &'static str {
-    if system {
-        "--system"
-    } else {
-        "--user"
-    }
-}
-
 impl PackageManager for Flatpak {
     fn display_name(&self) -> &'static str {
         "Flatpak"
