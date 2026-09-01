@@ -26,6 +26,7 @@ enum Msg {
     RepoList(Scope, Vec<RepoInfo>),
     Log(String),
     Error(String),
+    RequirePassword(Scope, backend::PmCommand, String),
     Done,
 }
 
@@ -199,7 +200,21 @@ impl App {
                     let _ = tx.send(Msg::InstalledList(scope, results));
                 }
                 Err(e) => {
-                    let _ = tx.send(Msg::Error(e));
+                    // Detect common sudo/prompt errors and ask the UI to request
+                    // a password so we can retry with sudo -S instead of
+                    // failing silently. Only special-case Flatpak here.
+                    let low = e.to_lowercase();
+                    if scope == Scope::Flatpak && (low.contains("terminal is required") || low.contains("password is required") || low.contains("a password is required")) {
+                        let label = "list flatpaks (system)".to_string();
+                        let cmd = backend::PmCommand::new(
+                            "flatpak",
+                            &["list", if system { "--system" } else { "--user" }, "--app", "--columns=application,name,version"],
+                            true,
+                        );
+                        let _ = tx.send(Msg::RequirePassword(scope, cmd, label));
+                    } else {
+                        let _ = tx.send(Msg::Error(e));
+                    }
                 }
             }
             let _ = tx.send(Msg::Done);
@@ -258,7 +273,18 @@ impl App {
                     let _ = tx.send(Msg::RepoList(scope, results));
                 }
                 Err(e) => {
-                    let _ = tx.send(Msg::Error(e));
+                    let low = e.to_lowercase();
+                    if scope == Scope::Flatpak && (low.contains("terminal is required") || low.contains("password is required") || low.contains("a password is required")) {
+                        let label = "list flatpak remotes (system)".to_string();
+                        let cmd = backend::PmCommand::new(
+                            "flatpak",
+                            &["remotes", if system { "--system" } else { "--user" }, "--columns=name,url,title"],
+                            true,
+                        );
+                        let _ = tx.send(Msg::RequirePassword(scope, cmd, label));
+                    } else {
+                        let _ = tx.send(Msg::Error(e));
+                    }
                 }
             }
             let _ = tx.send(Msg::Done);
@@ -289,7 +315,17 @@ impl App {
                     let _ = tx.send(Msg::Log(format!("-- {label}: done --\n")));
                 }
                 Err(e) => {
-                    let _ = tx.send(Msg::Error(format!("{label} failed: {e}")));
+                    // If sudo complains it needs a TTY or a password, prompt the
+                    // user for it instead of just logging an error. This can
+                    // happen when sudo is configured to require a tty (requiring
+                    // an interactive prompt) or when pkexec isn't available.
+                    let low = e.to_lowercase();
+                    if low.contains("terminal is required") || low.contains("password is required") || low.contains("a password is required") {
+                        // Ask the UI to request a password and retry this command.
+                        let _ = tx.send(Msg::RequirePassword(scope, cmd.clone(), label.clone()));
+                    } else {
+                        let _ = tx.send(Msg::Error(format!("{label} failed: {e}")));
+                    }
                 }
             }
 
@@ -323,6 +359,13 @@ impl App {
                 Msg::RepoList(Scope::Flatpak, r) => self.fp_repos = r,
                 Msg::Log(s) => self.append_log(&s),
                 Msg::Error(e) => self.append_log(&format!("ERROR: {e}")),
+                Msg::RequirePassword(scope, cmd, label) => {
+                    // Show the password modal and hold the pending command so the
+                    // user can enter a password to retry the action.
+                    self.pending_cmd = Some((scope, cmd, label));
+                    self.show_pw_prompt = true;
+                    self.append_log("Authentication required: prompting for password...");
+                }
                 Msg::Done => {
                     self.busy = false;
                     self.flatpak_available = crate::detect::flatpak_available();

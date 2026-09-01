@@ -180,11 +180,16 @@ pub fn execute(cmd: &PmCommand) -> Result<String, String> {
     if output.status.success() {
         Ok(combined)
     } else {
-        Err(if combined.trim().is_empty() {
-            format!("{launcher} exited with status {}", output.status)
+        let cmdline = format!("{} {}", launcher, full_args.join(" "));
+        // If the command produced no combined output, include exit status
+        // plus the exact command we tried, to help debugging "usage: sudo"
+        // cases where sudo printed its usage because of malformed args.
+        let err_text = if combined.trim().is_empty() {
+            format!("{} exited with status {}\ncommand: {}", launcher, output.status, cmdline)
         } else {
-            combined
-        })
+            format!("{}\ncommand: {}", combined, cmdline)
+        };
+        Err(err_text)
     }
 }
 
