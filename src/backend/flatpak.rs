@@ -129,27 +129,38 @@ impl PackageManager for Flatpak {
 
     fn list_repos(&self, system: bool) -> Result<Vec<RepoInfo>, String> {
         let out = if system {
-            super::execute(&PmCommand::new("flatpak", &["remotes", "--system", "--columns=name,url,title,disabled"], true))?
+            super::execute(&PmCommand::new("flatpak", &["remotes", "--system", "--columns=name,url,title"], true))?
         } else {
-            run_capture(
-                "flatpak",
-                &["remotes", "--user", "--columns=name,url,title,disabled"],
-            )?
+            run_capture("flatpak", &["remotes", "--user", "--columns=name,url,title"])?
         };
         let mut repos = Vec::new();
+        if out.trim().is_empty() {
+            // Fallback to plain output if the --columns format isn't supported
+            let raw = if system {
+                super::execute(&PmCommand::new("flatpak", &["remotes", "--system"], true))?
+            } else {
+                run_capture("flatpak", &["remotes", "--user"])?
+            };
+            for line in raw.lines() {
+                let cols: Vec<&str> = line.split_whitespace().collect();
+                if cols.is_empty() { continue; }
+                repos.push(RepoInfo {
+                    id: cols[0].trim().to_string(),
+                    name: cols.get(1).unwrap_or(&cols[0]).trim().to_string(),
+                    url: cols.get(2).unwrap_or(&"").trim().to_string(),
+                    enabled: true,
+                });
+            }
+            return Ok(repos);
+        }
         for line in out.lines() {
             let cols: Vec<&str> = line.split('\t').collect();
-            if cols.is_empty() || cols[0].trim().is_empty() {
-                continue;
-            }
+            if cols.is_empty() || cols[0].trim().is_empty() { continue; }
             repos.push(RepoInfo {
                 id: cols[0].trim().to_string(),
                 name: cols.get(2).unwrap_or(&cols[0]).trim().to_string(),
-                url: cols.get(1).unwrap_or(&"\"").trim().to_string(),
-                enabled: cols
-                    .get(3)
-                    .map(|s| !s.trim().eq_ignore_ascii_case("true"))
-                    .unwrap_or(true),
+                url: cols.get(1).unwrap_or(&"").trim().to_string(),
+                enabled: cols.get(3).map(|s| !s.trim().eq_ignore_ascii_case("true")).unwrap_or(true),
             });
         }
         Ok(repos)

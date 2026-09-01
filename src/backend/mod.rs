@@ -124,7 +124,8 @@ pub fn execute(cmd: &PmCommand) -> Result<String, String> {
     let (launcher, mut full_args, pass_via_stdin): (String, Vec<String>, bool) = if cmd.needs_root {
         // If a password was supplied use "sudo -S" and feed the password to stdin.
         if cmd.password.is_some() {
-            let mut args = vec![cmd.program.clone()];
+            // Use `sudo -S` to allow feeding the password on stdin.
+            let mut args = vec!["-S".to_string(), cmd.program.clone()];
             args.extend(cmd.args.clone());
             ("sudo".to_string(), args, true)
         } else if which("pkexec") {
