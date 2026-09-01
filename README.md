@@ -23,7 +23,42 @@ plus a built-in Flatpak tab. Comes with a dark/light theme toggle.
   authentication prompt. Flatpak operations default to `--user` scope and
   need no elevation at all.
 
-## Building
+## Installation
+
+### Quick install (recommended)
+
+This pulls `install.sh` from this repo and runs it — it detects your
+distro, installs build dependencies, makes sure you have a recent enough
+Rust toolchain (installing one via [rustup](https://rustup.rs) if not),
+builds the app, and installs it to `~/.local/bin` plus an app-menu entry:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/shv63/universal-pm/main/install.sh | bash
+```
+
+For a system-wide install to `/usr/local/bin` instead (uses `sudo`):
+
+```bash
+curl -sSL https://raw.githubusercontent.com/shv63/universal-pm/main/install.sh | bash -s -- --system
+```
+
+Piping a script straight from the internet into `bash` means you're
+trusting this repo completely, with no chance to look at what's about to
+run on your machine first. If you'd rather review it before running:
+
+```bash
+curl -sSLO https://raw.githubusercontent.com/shv63/universal-pm/main/install.sh
+less install.sh        # read it
+chmod +x install.sh
+./install.sh           # or ./install.sh --system
+```
+
+Re-running the script later (either way) pulls the latest `main` and
+rebuilds, so it doubles as an updater.
+
+### Building manually
+
+If you'd rather not run the installer at all:
 
 You'll need a reasonably recent Rust toolchain (edition 2021, roughly
 1.75+ is enough for the code itself, but `eframe`'s dependency tree wants a
@@ -49,6 +84,8 @@ On Arch: `sudo pacman -S libx11 libxkbcommon wayland mesa`
 Then build and run:
 
 ```bash
+git clone https://github.com/shv63/universal-pm.git
+cd universal-pm
 cargo build --release
 ./target/release/universal-pm
 ```
